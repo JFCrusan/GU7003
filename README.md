@@ -230,6 +230,6 @@ Pull requests and issue reports are welcome, especially from users with other GU
 
 ## Windows HIL automation
 
-The bounded Codex HIL controller keeps feature editing inside a dedicated worktree while compilation, Arduino upload, C920 capture, and evidence collection run in the parent Windows process. It automatically feeds logs and camera images into the next Codex iteration and stops at verified `PASS` or a documented human-review boundary.
+The bounded Codex HIL controller keeps feature editing inside a dedicated worktree while compilation, Arduino upload, C920 snapshot/video capture, and evidence collection run in the parent Windows process. It automatically feeds logs, exact snapshots, and bounded timestamped video-review frames into the next Codex iteration and stops at verified `PASS` or a documented human-review boundary.
 
 See [`docs/hil-automation.md`](docs/hil-automation.md) for the controller workflow, bench defaults, focused HIL script contract, safeguards, and the command that resumes the existing `feature/user-windows` worktree.

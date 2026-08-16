@@ -61,6 +61,141 @@
         ]
       }
     },
+    "dynamic_validation": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "video": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["match", "mismatch", "unreviewable"]
+          },
+          "observed_duration_seconds": {
+            "type": "number",
+            "minimum": 0
+          },
+          "duration_matches": {
+            "type": "boolean"
+          },
+          "states_match": {
+            "type": "boolean"
+          },
+          "observed_states": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": { "type": "string" },
+                "occurrence_count": { "type": "integer", "minimum": 0 },
+                "evidence_frames": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              },
+              "required": ["name", "occurrence_count", "evidence_frames"]
+            }
+          },
+          "alternation_matches": {
+            "type": "boolean"
+          },
+          "observed_transition_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "observed_cadence_seconds": {
+            "type": "number",
+            "minimum": 0
+          },
+          "cadence_matches": {
+            "type": "boolean"
+          },
+          "observed_direction": {
+            "type": "string",
+            "enum": ["none", "left", "right", "up", "down", "unknown"]
+          },
+          "direction_matches": {
+            "type": "boolean"
+          },
+          "continuity_matches": {
+            "type": "boolean"
+          },
+          "stale_content_observed": {
+            "type": "boolean"
+          },
+          "key_frames_match": {
+            "type": "boolean"
+          },
+          "key_frame_validation": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": { "type": "string" },
+                "evidence_frame": { "type": "string" },
+                "status": {
+                  "type": "string",
+                  "enum": ["match", "mismatch", "unreviewable"]
+                },
+                "observed_rows": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "layout_matches": { "type": "boolean" },
+                "forbidden_observed": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "observed": { "type": "string" }
+              },
+              "required": [
+                "name",
+                "evidence_frame",
+                "status",
+                "observed_rows",
+                "layout_matches",
+                "forbidden_observed",
+                "observed"
+              ]
+            }
+          },
+          "forbidden_observed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "observed": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "video",
+          "status",
+          "observed_duration_seconds",
+          "duration_matches",
+          "states_match",
+          "observed_states",
+          "alternation_matches",
+          "observed_transition_count",
+          "observed_cadence_seconds",
+          "cadence_matches",
+          "observed_direction",
+          "direction_matches",
+          "continuity_matches",
+          "stale_content_observed",
+          "key_frames_match",
+          "key_frame_validation",
+          "forbidden_observed",
+          "observed"
+        ]
+      }
+    },
     "tests_run": {
       "type": "array",
       "items": {
@@ -83,6 +218,7 @@
     "hil_script",
     "expected_display",
     "visual_validation",
+    "dynamic_validation",
     "tests_run",
     "remaining_issues",
     "human_review_reason"

@@ -213,6 +213,184 @@ function Read-VisualExpectations {
     return @($Expectations)
 }
 
+function Read-VideoExpectations {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string[]]$Videos
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return @()
+    }
+
+    $Manifest = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    if ($Manifest.PSObject.Properties.Name -notcontains "version" -or $Manifest.version -ne 1) {
+        throw "Video expectations must declare version 1: $Path"
+    }
+    if ($Manifest.PSObject.Properties.Name -notcontains "videos" -or @($Manifest.videos).Count -eq 0) {
+        throw "Video expectations must contain at least one video: $Path"
+    }
+
+    $VideosByName = @{}
+    foreach ($Video in $Videos) {
+        $Name = [System.IO.Path]::GetFileName($Video)
+        if ($VideosByName.ContainsKey($Name)) {
+            throw "Captured video names must be unique for dynamic validation: $Name"
+        }
+        $VideosByName[$Name] = $Video
+    }
+
+    $SeenVideos = @{}
+    $Expectations = @()
+    foreach ($VideoExpectation in @($Manifest.videos)) {
+        foreach ($Property in @("video", "duration", "states", "cadence", "scrolling", "keyFrames", "forbidden", "review")) {
+            if ($VideoExpectation.PSObject.Properties.Name -notcontains $Property) {
+                throw "Video expectation is missing property '$Property': $Path"
+            }
+        }
+
+        $VideoName = [string]$VideoExpectation.video
+        if ([string]::IsNullOrWhiteSpace($VideoName) -or
+            [System.IO.Path]::GetFileName($VideoName) -ne $VideoName) {
+            throw "Video expectation must use a filename without directories: '$VideoName'"
+        }
+        if ($SeenVideos.ContainsKey($VideoName)) {
+            throw "Video expectation filenames must be unique: $VideoName"
+        }
+        if (-not $VideosByName.ContainsKey($VideoName)) {
+            throw "Video expectation does not match a captured video: $VideoName"
+        }
+
+        foreach ($Property in @("minSeconds", "maxSeconds")) {
+            if ($VideoExpectation.duration.PSObject.Properties.Name -notcontains $Property) {
+                throw "Video duration expectation is missing '$Property': $VideoName"
+            }
+        }
+        $MinimumSeconds = [double]$VideoExpectation.duration.minSeconds
+        $MaximumSeconds = [double]$VideoExpectation.duration.maxSeconds
+        if ($MinimumSeconds -le 0 -or $MaximumSeconds -lt $MinimumSeconds) {
+            throw "Video duration range is invalid: $VideoName"
+        }
+
+        foreach ($Property in @("framesPerSecond", "maxFrames")) {
+            if ($VideoExpectation.review.PSObject.Properties.Name -notcontains $Property) {
+                throw "Video review settings are missing '$Property': $VideoName"
+            }
+        }
+        $ReviewFramesPerSecond = [double]$VideoExpectation.review.framesPerSecond
+        $MaximumReviewFrames = [int]$VideoExpectation.review.maxFrames
+        if ($ReviewFramesPerSecond -lt 0.25 -or $ReviewFramesPerSecond -gt 8.0 -or
+            $MaximumReviewFrames -lt 2 -or $MaximumReviewFrames -gt 48) {
+            throw "Video review settings exceed the supported bounds: $VideoName"
+        }
+        if (([int][Math]::Ceiling($MaximumSeconds * $ReviewFramesPerSecond) + 1) -gt $MaximumReviewFrames) {
+            throw "Video review maxFrames would reduce the declared framesPerSecond before maxSeconds: $VideoName"
+        }
+
+        $StateNames = @{}
+        $States = @()
+        foreach ($State in @($VideoExpectation.states)) {
+            foreach ($Property in @("name", "description", "minOccurrences")) {
+                if ($State.PSObject.Properties.Name -notcontains $Property) {
+                    throw "Video state expectation is missing '$Property': $VideoName"
+                }
+            }
+            $StateName = [string]$State.name
+            if ([string]::IsNullOrWhiteSpace($StateName) -or $StateNames.ContainsKey($StateName)) {
+                throw "Video state names must be non-empty and unique: $VideoName"
+            }
+            if ([string]::IsNullOrWhiteSpace([string]$State.description) -or [int]$State.minOccurrences -lt 1) {
+                throw "Video state description/minOccurrences is invalid for '$StateName': $VideoName"
+            }
+            $StateNames[$StateName] = $true
+            $States += $State
+        }
+
+        foreach ($Property in @("mode", "states", "expectedStateSeconds", "toleranceSeconds", "minTransitions")) {
+            if ($VideoExpectation.cadence.PSObject.Properties.Name -notcontains $Property) {
+                throw "Video cadence expectation is missing '$Property': $VideoName"
+            }
+        }
+        $CadenceMode = [string]$VideoExpectation.cadence.mode
+        if (@("none", "steady", "alternating") -notcontains $CadenceMode) {
+            throw "Video cadence mode must be none, steady, or alternating: $VideoName"
+        }
+        if ($CadenceMode -eq "alternating") {
+            if (@($VideoExpectation.cadence.states).Count -lt 2 -or
+                [double]$VideoExpectation.cadence.expectedStateSeconds -le 0 -or
+                [double]$VideoExpectation.cadence.toleranceSeconds -lt 0 -or
+                [int]$VideoExpectation.cadence.minTransitions -lt 1) {
+                throw "Alternating cadence expectations are incomplete: $VideoName"
+            }
+            if (($ReviewFramesPerSecond * [double]$VideoExpectation.cadence.expectedStateSeconds) -lt 2.0) {
+                throw "Alternating cadence review must sample at least twice per expected state: $VideoName"
+            }
+            foreach ($StateName in @($VideoExpectation.cadence.states)) {
+                if (-not $StateNames.ContainsKey([string]$StateName)) {
+                    throw "Cadence references unknown state '$StateName': $VideoName"
+                }
+            }
+        }
+
+        foreach ($Property in @("direction", "continuityRequired", "noStaleContent")) {
+            if ($VideoExpectation.scrolling.PSObject.Properties.Name -notcontains $Property) {
+                throw "Video scrolling expectation is missing '$Property': $VideoName"
+            }
+        }
+        $Direction = [string]$VideoExpectation.scrolling.direction
+        if (@("none", "left", "right", "up", "down") -notcontains $Direction) {
+            throw "Unsupported scrolling direction '$Direction': $VideoName"
+        }
+
+        $KeyFrameNames = @{}
+        $KeyFrames = @()
+        foreach ($KeyFrame in @($VideoExpectation.keyFrames)) {
+            foreach ($Property in @("name", "requiredRows", "layout", "forbidden")) {
+                if ($KeyFrame.PSObject.Properties.Name -notcontains $Property) {
+                    throw "Video key-frame expectation is missing '$Property': $VideoName"
+                }
+            }
+            $KeyFrameName = [string]$KeyFrame.name
+            if ([string]::IsNullOrWhiteSpace($KeyFrameName) -or $KeyFrameNames.ContainsKey($KeyFrameName)) {
+                throw "Video key-frame names must be non-empty and unique: $VideoName"
+            }
+            $HasPosition = $KeyFrame.PSObject.Properties.Name -contains "position"
+            $HasTimestamp = $KeyFrame.PSObject.Properties.Name -contains "atSeconds"
+            if ($HasPosition -eq $HasTimestamp) {
+                throw "Key frame '$KeyFrameName' must declare exactly one of position or atSeconds: $VideoName"
+            }
+            if ($HasPosition -and @("start", "end") -notcontains [string]$KeyFrame.position) {
+                throw "Key frame '$KeyFrameName' position must be start or end: $VideoName"
+            }
+            if ($HasTimestamp -and [double]$KeyFrame.atSeconds -lt 0) {
+                throw "Key frame '$KeyFrameName' has a negative timestamp: $VideoName"
+            }
+            if (@($KeyFrame.requiredRows).Count -eq 0 -or [string]::IsNullOrWhiteSpace([string]$KeyFrame.layout)) {
+                throw "Key frame '$KeyFrameName' needs exact rows and layout: $VideoName"
+            }
+            $KeyFrameNames[$KeyFrameName] = $true
+            $KeyFrames += $KeyFrame
+        }
+
+        $SeenVideos[$VideoName] = $true
+        $Expectations += [pscustomobject]@{
+            Video = $VideoName
+            VideoPath = $VideosByName[$VideoName]
+            MinimumSeconds = $MinimumSeconds
+            MaximumSeconds = $MaximumSeconds
+            States = $States
+            Cadence = $VideoExpectation.cadence
+            Scrolling = $VideoExpectation.scrolling
+            KeyFrames = $KeyFrames
+            Forbidden = @($VideoExpectation.forbidden)
+            ReviewFramesPerSecond = $ReviewFramesPerSecond
+            MaximumReviewFrames = $MaximumReviewFrames
+        }
+    }
+
+    return @($Expectations)
+}
+
 function Invoke-LoggedPowerShellScript {
     param(
         [Parameter(Mandatory = $true)][string]$ScriptPath,
@@ -252,6 +430,7 @@ function Test-ResultContract {
         "hil_script",
         "expected_display",
         "visual_validation",
+        "dynamic_validation",
         "tests_run",
         "remaining_issues",
         "human_review_reason"
@@ -307,6 +486,7 @@ $ScenarioPath = Join-Path (Join-Path $PSScriptRoot "scenarios") "$Feature.json"
 $ScenarioContext = ""
 $ScenarioHilScript = ""
 $RequireVisualExpectations = $false
+$EvidenceMode = "snapshot"
 if (Test-Path -LiteralPath $ScenarioPath -PathType Leaf) {
     $Scenario = Get-Content -LiteralPath $ScenarioPath -Raw | ConvertFrom-Json
     if ($Scenario.PSObject.Properties.Name -contains "hilScript") {
@@ -321,6 +501,12 @@ if (Test-Path -LiteralPath $ScenarioPath -PathType Leaf) {
     if ($Scenario.PSObject.Properties.Name -contains "requireVisualExpectations") {
         $RequireVisualExpectations = [bool]$Scenario.requireVisualExpectations
     }
+    if ($Scenario.PSObject.Properties.Name -contains "evidenceMode") {
+        $EvidenceMode = [string]$Scenario.evidenceMode
+    }
+}
+if (@("snapshot", "video", "mixed") -notcontains $EvidenceMode) {
+    throw "Scenario evidenceMode must be snapshot, video, or mixed: $ScenarioPath"
 }
 
 $ConfiguredHilScript = $HilScript
@@ -394,6 +580,7 @@ if (-not [string]::IsNullOrWhiteSpace($ScenarioContext)) {
     Write-Host "Scenario context:   $ScenarioPath"
 }
 Write-Host "Exact visuals:      $(if ($RequireVisualExpectations) { 'required' } else { 'optional' })"
+Write-Host "Evidence mode:      $EvidenceMode"
 
 if ($PlanOnly) {
     Write-Host "PLAN ONLY: no branch, worktree, Codex, compile, upload, or camera action was performed."
@@ -459,6 +646,7 @@ Bench contract:
 - Port: $Port.
 - Camera: $VideoDevice.
 - Crop: $Crop.
+- Scenario evidence mode: $EvidenceMode.
 - The controller, outside your sandbox, owns compile-all, upload, waits, and camera capture.
 - Do not upload hardware, open the camera, or run a hardware-facing HIL script yourself.
 
@@ -471,13 +659,16 @@ Safety contract:
 Result contract:
 - Return status ready_for_hil after implementation/static checks are ready for external validation.
 - For ready_for_hil, hil_script must be a relative .ps1 path inside this worktree. It must accept -FQBN, -Port, and -CaptureDirectory. Prefer '$ConfiguredHilScript' when that path is configured.
-- Return pass only after reviewing the latest controller log and every attached image, only when they visibly prove the task, and only if you made no changes after that evidence.
+- Return pass only after reviewing the latest controller log and every attached snapshot/video-review frame, only when they prove every declared contract item, and only if you made no changes after that evidence.
 - A capture script exiting zero proves capture, not visual correctness. Inspect the pixels and expected state transitions.
 - A focused HIL script may define authoritative per-image acceptance in visual-expectations.json under its CaptureDirectory. When exact expectations appear in the latest evidence, visual_validation must contain exactly one record for each expected image filename. Transcribe each visible text row verbatim and in order into observed_rows; do not copy the expected rows unless those pixels are actually visible.
 - Mark a visual_validation record as match only when observed_rows exactly equal requiredRows, layout_matches is true, forbidden_observed is empty, and all placement, wrapping, and absence requirements match. Materially incorrect placement, joined text, wrapping, truncation, stale content, or extra content is a mismatch even when the broader behavior works.
+- A focused HIL script may also define authoritative dynamic acceptance in video-expectations.json. The original video is retained, but Codex video input is not supported, so the controller attaches a bounded ordered series of timestamped frames and supplies FFprobe timing metadata. dynamic_validation must contain exactly one record for every expected video.
+- For each dynamic record, evaluate the declared duration, required state presence, cadence/alternation, direction, continuity, stale-content prohibition, exact key frames, and forbidden content independently. Report measured/observed values and cite only attached timestamped frame filenames. State occurrence counts need at least that many distinct evidence_frames; each key-frame verdict needs its exact evidence_frame. Status match requires every applicable item to match; uncertainty is unreviewable, never a permissive match.
+- Do not use a general 'looks okay' verdict. A duration outside its declared range, absent state, insufficient transition count, cadence outside tolerance, wrong direction, discontinuity, stale content, key-frame text/layout mismatch, forbidden content, missing evidence, or unreviewable evidence rejects pass.
 - For mismatch or unreviewable evidence, do not return pass. Describe the pixels actually observed and either make the smallest safe correction for another HIL cycle or return human_review at a genuine boundary.
 - Return human_review only for a genuine boundary that cannot be resolved safely in another automated iteration; explain it precisely.
-- Use the required JSON schema fields, including visual_validation. Use an empty string/array where a field is not applicable.
+- Use the required JSON schema fields, including visual_validation and dynamic_validation. Use an empty string/array and false/zero only where a field is not applicable; applicable match booleans must reflect the evidence.
 
 Scenario context:
 $ScenarioContext
@@ -554,8 +745,11 @@ $LatestEvidencePrompt
         elseif ($LatestEvidence.CompileExitCode -ne 0 -or $LatestEvidence.HilExitCode -ne 0) {
             $PassProblem = "PASS was rejected because the latest external compile/HIL process did not exit successfully."
         }
-        elseif (@($LatestEvidence.Images).Count -eq 0) {
-            $PassProblem = "PASS was rejected because the latest HIL run produced no camera images."
+        elseif ($EvidenceMode -in @("snapshot", "mixed") -and @($LatestEvidence.Images).Count -eq 0) {
+            $PassProblem = "PASS was rejected because snapshot evidence was required but the latest HIL run produced no camera images."
+        }
+        elseif ($EvidenceMode -in @("video", "mixed") -and @($LatestEvidence.Videos).Count -eq 0) {
+            $PassProblem = "PASS was rejected because video evidence was required but the latest HIL run produced no video."
         }
         elseif ((Get-WorktreeFingerprint -WorkingTree $WorktreePath) -ne $LatestEvidence.TestedFingerprint) {
             $PassProblem = "PASS was rejected because files changed after the latest HIL run. Another HIL cycle is required."
@@ -565,6 +759,9 @@ $LatestEvidencePrompt
         }
         elseif ($RequireVisualExpectations -and @($LatestEvidence.VisualExpectations).Count -eq 0) {
             $PassProblem = "PASS was rejected because this scenario requires test-owned exact visual expectations."
+        }
+        elseif ($EvidenceMode -in @("video", "mixed") -and @($LatestEvidence.VideoExpectations).Count -eq 0) {
+            $PassProblem = "PASS was rejected because dynamic evidence mode requires test-owned video expectations."
         }
 
         if ([string]::IsNullOrWhiteSpace($PassProblem) -and
@@ -609,6 +806,147 @@ $LatestEvidencePrompt
                     }
                     if ([string]::IsNullOrWhiteSpace([string]$Matches[0].observed)) {
                         $PassProblem = "PASS was rejected because '$($Expectation.Image)' has no visual observation."
+                        break
+                    }
+                }
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($PassProblem) -and
+            @($LatestEvidence.VideoExpectations).Count -gt 0) {
+            $DynamicValidation = @($Result.dynamic_validation)
+            if ($DynamicValidation.Count -ne @($LatestEvidence.VideoExpectations).Count) {
+                $PassProblem = "PASS was rejected because dynamic_validation must contain exactly one record per test-owned video expectation."
+            }
+            else {
+                foreach ($Expectation in @($LatestEvidence.VideoExpectations)) {
+                    $Matches = @($DynamicValidation | Where-Object { $_.video -eq $Expectation.Video })
+                    if ($Matches.Count -ne 1) {
+                        $PassProblem = "PASS was rejected because dynamic_validation did not uniquely cover '$($Expectation.Video)'."
+                        break
+                    }
+                    $Validation = $Matches[0]
+                    $EvidenceMatches = @($LatestEvidence.VideoEvidence | Where-Object { $_.Video -eq $Expectation.Video })
+                    if ($EvidenceMatches.Count -ne 1) {
+                        $PassProblem = "PASS was rejected because prepared video evidence did not uniquely cover '$($Expectation.Video)'."
+                        break
+                    }
+                    $AvailableReviewFrames = @($EvidenceMatches[0].ReviewImages | ForEach-Object { [System.IO.Path]::GetFileName($_) })
+
+                    $MeasuredDuration = [double]$EvidenceMatches[0].Metadata.durationSeconds
+                    if ($MeasuredDuration -lt $Expectation.MinimumSeconds -or $MeasuredDuration -gt $Expectation.MaximumSeconds) {
+                        $PassProblem = "PASS was rejected because '$($Expectation.Video)' duration was $MeasuredDuration seconds, outside $($Expectation.MinimumSeconds)-$($Expectation.MaximumSeconds)."
+                        break
+                    }
+                    if ($Validation.status -ne "match" -or $Validation.duration_matches -ne $true -or
+                        [Math]::Abs([double]$Validation.observed_duration_seconds - $MeasuredDuration) -gt 0.25) {
+                        $PassProblem = "PASS was rejected because '$($Expectation.Video)' did not receive a matching, measured duration verdict."
+                        break
+                    }
+
+                    if (@($Expectation.States).Count -gt 0) {
+                        if ($Validation.states_match -ne $true) {
+                            $PassProblem = "PASS was rejected because '$($Expectation.Video)' did not match all required states."
+                            break
+                        }
+                        foreach ($State in @($Expectation.States)) {
+                            $StateMatches = @($Validation.observed_states | Where-Object { $_.name -ceq [string]$State.name })
+                            if ($StateMatches.Count -ne 1 -or
+                                [int]$StateMatches[0].occurrence_count -lt [int]$State.minOccurrences -or
+                                @($StateMatches[0].evidence_frames).Count -lt [int]$StateMatches[0].occurrence_count -or
+                                @($StateMatches[0].evidence_frames | Sort-Object -Unique).Count -ne @($StateMatches[0].evidence_frames).Count) {
+                                $PassProblem = "PASS was rejected because '$($Expectation.Video)' did not prove state '$($State.name)' at least $($State.minOccurrences) time(s)."
+                                break
+                            }
+                            foreach ($EvidenceFrame in @($StateMatches[0].evidence_frames)) {
+                                if ($AvailableReviewFrames -cnotcontains [string]$EvidenceFrame) {
+                                    $PassProblem = "PASS was rejected because '$($Expectation.Video)' state '$($State.name)' cites unknown frame '$EvidenceFrame'."
+                                    break
+                                }
+                            }
+                            if (-not [string]::IsNullOrWhiteSpace($PassProblem)) {
+                                break
+                            }
+                        }
+                        if (-not [string]::IsNullOrWhiteSpace($PassProblem)) {
+                            break
+                        }
+                    }
+
+                    $CadenceMode = [string]$Expectation.Cadence.mode
+                    if ($CadenceMode -eq "alternating") {
+                        $ExpectedCadence = [double]$Expectation.Cadence.expectedStateSeconds
+                        $CadenceTolerance = [double]$Expectation.Cadence.toleranceSeconds
+                        if ($Validation.alternation_matches -ne $true -or
+                            $Validation.cadence_matches -ne $true -or
+                            [int]$Validation.observed_transition_count -lt [int]$Expectation.Cadence.minTransitions -or
+                            [int]$Validation.observed_transition_count -gt ($AvailableReviewFrames.Count - 1) -or
+                            [Math]::Abs([double]$Validation.observed_cadence_seconds - $ExpectedCadence) -gt $CadenceTolerance) {
+                            $PassProblem = "PASS was rejected because '$($Expectation.Video)' did not prove the declared alternation/cadence contract."
+                            break
+                        }
+                    }
+                    elseif ($CadenceMode -eq "steady" -and $Validation.cadence_matches -ne $true) {
+                        $PassProblem = "PASS was rejected because '$($Expectation.Video)' did not prove the declared steady-state cadence contract."
+                        break
+                    }
+
+                    $ExpectedDirection = [string]$Expectation.Scrolling.direction
+                    if ($ExpectedDirection -ne "none" -and
+                        ($Validation.direction_matches -ne $true -or [string]$Validation.observed_direction -cne $ExpectedDirection)) {
+                        $PassProblem = "PASS was rejected because '$($Expectation.Video)' did not prove $ExpectedDirection scrolling."
+                        break
+                    }
+                    if ([bool]$Expectation.Scrolling.continuityRequired -and $Validation.continuity_matches -ne $true) {
+                        $PassProblem = "PASS was rejected because '$($Expectation.Video)' did not prove continuous motion/state changes."
+                        break
+                    }
+                    if ([bool]$Expectation.Scrolling.noStaleContent -and $Validation.stale_content_observed -ne $false) {
+                        $PassProblem = "PASS was rejected because '$($Expectation.Video)' showed or could not exclude stale content."
+                        break
+                    }
+
+                    if (@($Expectation.KeyFrames).Count -gt 0) {
+                        $KeyFrameValidation = @($Validation.key_frame_validation)
+                        if ($Validation.key_frames_match -ne $true -or
+                            $KeyFrameValidation.Count -ne @($Expectation.KeyFrames).Count) {
+                            $PassProblem = "PASS was rejected because '$($Expectation.Video)' did not exactly cover every key-frame expectation."
+                            break
+                        }
+                        foreach ($KeyFrame in @($Expectation.KeyFrames)) {
+                            $KeyMatches = @($KeyFrameValidation | Where-Object { $_.name -ceq [string]$KeyFrame.name })
+                            if ($KeyMatches.Count -ne 1 -or $KeyMatches[0].status -ne "match" -or
+                                $AvailableReviewFrames -cnotcontains [string]$KeyMatches[0].evidence_frame -or
+                                $KeyMatches[0].layout_matches -ne $true -or
+                                @($KeyMatches[0].forbidden_observed).Count -ne 0 -or
+                                [string]::IsNullOrWhiteSpace([string]$KeyMatches[0].observed)) {
+                                $PassProblem = "PASS was rejected because '$($Expectation.Video)' key frame '$($KeyFrame.name)' was not an exact match."
+                                break
+                            }
+                            $ExpectedRows = @($KeyFrame.requiredRows)
+                            $ObservedRows = @($KeyMatches[0].observed_rows)
+                            if ($ExpectedRows.Count -ne $ObservedRows.Count) {
+                                $PassProblem = "PASS was rejected because '$($Expectation.Video)' key frame '$($KeyFrame.name)' reported the wrong row count."
+                                break
+                            }
+                            for ($RowIndex = 0; $RowIndex -lt $ExpectedRows.Count; $RowIndex++) {
+                                if ([string]$ObservedRows[$RowIndex] -cne [string]$ExpectedRows[$RowIndex]) {
+                                    $PassProblem = "PASS was rejected because '$($Expectation.Video)' key frame '$($KeyFrame.name)' row $($RowIndex + 1) was not exact."
+                                    break
+                                }
+                            }
+                            if (-not [string]::IsNullOrWhiteSpace($PassProblem)) {
+                                break
+                            }
+                        }
+                        if (-not [string]::IsNullOrWhiteSpace($PassProblem)) {
+                            break
+                        }
+                    }
+
+                    if (@($Validation.forbidden_observed).Count -ne 0 -or
+                        [string]::IsNullOrWhiteSpace([string]$Validation.observed)) {
+                        $PassProblem = "PASS was rejected because '$($Expectation.Video)' contained forbidden material or lacked a concrete dynamic observation."
                         break
                     }
                 }
@@ -713,6 +1051,12 @@ $LatestEvidencePrompt
             Sort-Object FullName |
             Select-Object -ExpandProperty FullName
     )
+    $Videos = @(
+        Get-ChildItem -LiteralPath $CaptureDirectory -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { @(".mkv", ".mp4", ".mov", ".avi", ".webm") -contains $_.Extension.ToLowerInvariant() } |
+            Sort-Object FullName |
+            Select-Object -ExpandProperty FullName
+    )
     $VisualExpectationsPath = Join-Path $CaptureDirectory "visual-expectations.json"
     $VisualExpectations = @()
     $VisualExpectationProblem = ""
@@ -732,6 +1076,94 @@ $LatestEvidencePrompt
         }
         $HilExitCode = -1
     }
+
+    $VideoExpectationsPath = Join-Path $CaptureDirectory "video-expectations.json"
+    $VideoExpectations = @()
+    $VideoExpectationProblem = ""
+    try {
+        $VideoExpectations = @(Read-VideoExpectations -Path $VideoExpectationsPath -Videos $Videos)
+        if ($EvidenceMode -in @("video", "mixed") -and $VideoExpectations.Count -eq 0) {
+            throw "This scenario requires $VideoExpectationsPath."
+        }
+    }
+    catch {
+        $VideoExpectationProblem = $_.Exception.Message
+        if ([string]::IsNullOrWhiteSpace($RunnerProblem)) {
+            $RunnerProblem = $VideoExpectationProblem
+        }
+        else {
+            $RunnerProblem = "$RunnerProblem $VideoExpectationProblem"
+        }
+        $HilExitCode = -1
+    }
+
+    $VideoEvidence = @()
+    $VideoReviewImages = @()
+    if ([string]::IsNullOrWhiteSpace($VideoExpectationProblem)) {
+        $PrepareVideoEvidencePath = Join-Path $PSScriptRoot "prepare-video-evidence.ps1"
+        foreach ($Video in $Videos) {
+            $VideoName = [System.IO.Path]::GetFileName($Video)
+            $MatchingExpectation = @($VideoExpectations | Where-Object { $_.Video -eq $VideoName })
+            $SamplesPerSecond = 2.0
+            $MaximumFrames = 24
+            $AdditionalTimestamps = @()
+            if ($MatchingExpectation.Count -eq 1) {
+                $SamplesPerSecond = [double]$MatchingExpectation[0].ReviewFramesPerSecond
+                $MaximumFrames = [int]$MatchingExpectation[0].MaximumReviewFrames
+                foreach ($KeyFrame in @($MatchingExpectation[0].KeyFrames)) {
+                    if ($KeyFrame.PSObject.Properties.Name -contains "atSeconds") {
+                        $AdditionalTimestamps += [double]$KeyFrame.atSeconds
+                    }
+                    elseif ([string]$KeyFrame.position -eq "start") {
+                        $AdditionalTimestamps += 0.0
+                    }
+                }
+            }
+
+            $SafeVideoName = [System.IO.Path]::GetFileNameWithoutExtension($VideoName)
+            $ReviewDirectory = Join-Path (Join-Path $CycleDirectory "video-review") $SafeVideoName
+            $ReviewLog = Join-Path $CycleDirectory "video-review-$SafeVideoName.log"
+            $InvariantCulture = [System.Globalization.CultureInfo]::InvariantCulture
+            $PrepareArguments = @(
+                "-Video", $Video,
+                "-OutputDirectory", $ReviewDirectory,
+                "-SamplesPerSecond", $SamplesPerSecond.ToString($InvariantCulture),
+                "-MaximumFrames", ([string]$MaximumFrames)
+            )
+            if ($AdditionalTimestamps.Count -gt 0) {
+                $AdditionalCsv = @($AdditionalTimestamps | ForEach-Object { $_.ToString("0.######", $InvariantCulture) }) -join ","
+                $PrepareArguments += @("-AdditionalTimestampsCsv", $AdditionalCsv)
+            }
+
+            $PrepareExitCode = Invoke-LoggedPowerShellScript `
+                -ScriptPath $PrepareVideoEvidencePath `
+                -Arguments $PrepareArguments `
+                -LogPath $ReviewLog
+            if ($PrepareExitCode -ne 0) {
+                $RunnerProblem = "$RunnerProblem Video evidence preparation failed for '$VideoName' with exit code $PrepareExitCode.".Trim()
+                $HilExitCode = -1
+                continue
+            }
+
+            $MetadataPath = Join-Path $ReviewDirectory "video-metadata.json"
+            if (-not (Test-Path -LiteralPath $MetadataPath -PathType Leaf)) {
+                $RunnerProblem = "$RunnerProblem Video metadata was not created for '$VideoName'.".Trim()
+                $HilExitCode = -1
+                continue
+            }
+            $Metadata = Get-Content -LiteralPath $MetadataPath -Raw | ConvertFrom-Json
+            $ReviewImages = @($Metadata.samples | Select-Object -ExpandProperty imagePath)
+            $VideoReviewImages += $ReviewImages
+            $VideoEvidence += [pscustomobject]@{
+                Video = $VideoName
+                VideoPath = $Video
+                MetadataPath = $MetadataPath
+                Metadata = $Metadata
+                ReviewImages = $ReviewImages
+                ReviewLog = $ReviewLog
+            }
+        }
+    }
     $TestedFingerprint = Get-WorktreeFingerprint -WorkingTree $WorktreePath
     $LatestEvidence = [pscustomobject]@{
         Iteration = $Iteration
@@ -743,15 +1175,29 @@ $LatestEvidencePrompt
         VisualExpectations = $VisualExpectations
         VisualExpectationsPath = $VisualExpectationsPath
         Images = $Images
+        VideoExpectations = $VideoExpectations
+        VideoExpectationsPath = $VideoExpectationsPath
+        Videos = $Videos
+        VideoEvidence = $VideoEvidence
+        VideoReviewImages = $VideoReviewImages
         TestedFingerprint = $TestedFingerprint
         CompileLog = $CompileLog
         HilLog = $HilLog
     }
-    $LatestEvidence | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $EvidencePath
+    $LatestEvidence | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $EvidencePath
 
     $VisualExpectationsPrompt = "No test-owned exact visual expectations were supplied."
     if ($VisualExpectations.Count -gt 0) {
         $VisualExpectationsPrompt = $VisualExpectations | ConvertTo-Json -Depth 5
+    }
+
+    $VideoExpectationsPrompt = "No test-owned dynamic video expectations were supplied."
+    if ($VideoExpectations.Count -gt 0) {
+        $VideoExpectationsPrompt = $VideoExpectations | ConvertTo-Json -Depth 8
+    }
+    $VideoEvidencePrompt = "No prepared video evidence exists."
+    if ($VideoEvidence.Count -gt 0) {
+        $VideoEvidencePrompt = $VideoEvidence | ConvertTo-Json -Depth 8
     }
 
     $LatestEvidencePrompt = @"
@@ -764,7 +1210,12 @@ Codex-authored general display/state transitions:
 - $(@($Result.expected_display) -join "`n- ")
 Authoritative test-owned exact visual expectations:
 $VisualExpectationsPrompt
-Camera images attached to this iteration: $($Images.Count)
+Authoritative test-owned dynamic video expectations:
+$VideoExpectationsPrompt
+Prepared video evidence (original clips retained at videoPath; ordered timestamped frame paths are attached):
+$VideoEvidencePrompt
+Static camera images attached to this iteration: $($Images.Count)
+Timestamped video-review frames attached to this iteration: $($VideoReviewImages.Count)
 
 Compile log:
 $(Get-LogExcerpt -Path $CompileLog)
@@ -772,7 +1223,7 @@ $(Get-LogExcerpt -Path $CompileLog)
 Focused HIL log:
 $(Get-LogExcerpt -Path $HilLog)
 "@
-    $LatestImages = $Images
+    $LatestImages = @($Images) + @($VideoReviewImages)
 }
 
 if ([string]::IsNullOrWhiteSpace($FinalStatus)) {
