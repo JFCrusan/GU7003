@@ -67,11 +67,29 @@ param(
 
 It should compile the focused sketch, upload it, wait for each observable state, save every `.jpg`, `.jpeg`, or `.png` capture beneath `CaptureDirectory`, throw on mechanical failures, and print the capture paths. Semantic display correctness is decided by Codex from the attached images, not by a zero process exit code alone.
 
+A feature test can make visual acceptance exact by writing `visual-expectations.json` beneath `CaptureDirectory`. The file uses this shape:
+
+```json
+{
+  "version": 1,
+  "captures": [
+    {
+      "image": "state-name.jpg",
+      "requiredRows": ["EXACT TOP TEXT", "EXACT BOTTOM TEXT"],
+      "layout": "Describe required placement and wrapping.",
+      "forbidden": ["Describe stale, joined, wrapped, or extra content that must reject the frame."]
+    }
+  ]
+}
+```
+
+The controller validates that each manifest entry names exactly one captured image and sends the test-owned contract to the visual reviewer. When a scenario sets `requireVisualExpectations` to `true`, missing or invalid expectations fail the HIL cycle. Codex must return a structured `visual_validation` record for every expected image, including verbatim `observed_rows`, a placement/wrapping verdict, and any forbidden content it sees. The controller compares those observed rows to `requiredRows` exactly; any missing, mismatched, joined, wrapped, forbidden, or unreviewable frame rejects `pass`.
+
 Pass `-HilScript hil/test-name.ps1` to pin a specific focused test. A matching `hil/scenarios/<feature>.json` may also provide a default script and known starting context.
 
 ## Terminal states and safeguards
 
-- `PASS`: the latest compile and focused HIL processes exited successfully, at least one image was captured, Codex inspected the evidence, and the tested feature fingerprint still matches the worktree.
+- `PASS`: the latest compile and focused HIL processes exited successfully, at least one image was captured, every test-owned exact visual expectation received a matching per-image verdict when present, Codex inspected the evidence, and the tested feature fingerprint still matches the worktree.
 - `HUMAN REVIEW BOUNDARY`: the retry limit was reached, hardware/evidence is genuinely ambiguous or unavailable, the Codex process failed, structured output was invalid, or protected Git state changed.
 
 At either boundary, the controller prints the feature branch, worktree, final Git status, and evidence directory. Review and commit remain explicit human actions.

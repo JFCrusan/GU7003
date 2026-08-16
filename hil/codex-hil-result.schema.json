@@ -19,6 +19,48 @@
         "type": "string"
       }
     },
+    "visual_validation": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "image": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["match", "mismatch", "unreviewable"]
+          },
+          "observed_rows": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "layout_matches": {
+            "type": "boolean"
+          },
+          "forbidden_observed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "observed": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "image",
+          "status",
+          "observed_rows",
+          "layout_matches",
+          "forbidden_observed",
+          "observed"
+        ]
+      }
+    },
     "tests_run": {
       "type": "array",
       "items": {
@@ -40,6 +82,7 @@
     "summary",
     "hil_script",
     "expected_display",
+    "visual_validation",
     "tests_run",
     "remaining_issues",
     "human_review_reason"

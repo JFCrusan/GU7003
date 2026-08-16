@@ -146,6 +146,73 @@ function Get-LogExcerpt {
     return "(earlier output omitted)`n" + $Content.Substring($Content.Length - $MaximumCharacters)
 }
 
+function Read-VisualExpectations {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string[]]$Images
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return @()
+    }
+
+    $Manifest = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    if ($Manifest.PSObject.Properties.Name -notcontains "version" -or $Manifest.version -ne 1) {
+        throw "Visual expectations must declare version 1: $Path"
+    }
+    if ($Manifest.PSObject.Properties.Name -notcontains "captures" -or @($Manifest.captures).Count -eq 0) {
+        throw "Visual expectations must contain at least one capture: $Path"
+    }
+
+    $ImagesByName = @{}
+    foreach ($Image in $Images) {
+        $Name = [System.IO.Path]::GetFileName($Image)
+        if ($ImagesByName.ContainsKey($Name)) {
+            throw "Captured image names must be unique for exact visual validation: $Name"
+        }
+        $ImagesByName[$Name] = $Image
+    }
+
+    $Seen = @{}
+    $Expectations = @()
+    foreach ($Capture in @($Manifest.captures)) {
+        foreach ($Property in @("image", "requiredRows", "layout", "forbidden")) {
+            if ($Capture.PSObject.Properties.Name -notcontains $Property) {
+                throw "Visual expectation is missing property '$Property': $Path"
+            }
+        }
+
+        $ImageName = [string]$Capture.image
+        if ([string]::IsNullOrWhiteSpace($ImageName) -or
+            [System.IO.Path]::GetFileName($ImageName) -ne $ImageName) {
+            throw "Visual expectation image must be a filename without directories: '$ImageName'"
+        }
+        if ($Seen.ContainsKey($ImageName)) {
+            throw "Visual expectation image names must be unique: $ImageName"
+        }
+        if (-not $ImagesByName.ContainsKey($ImageName)) {
+            throw "Visual expectation does not match a captured image: $ImageName"
+        }
+        if (@($Capture.requiredRows).Count -eq 0) {
+            throw "Visual expectation must name at least one exact required row: $ImageName"
+        }
+        if ([string]::IsNullOrWhiteSpace([string]$Capture.layout)) {
+            throw "Visual expectation must describe exact layout: $ImageName"
+        }
+
+        $Seen[$ImageName] = $true
+        $Expectations += [pscustomobject]@{
+            Image = $ImageName
+            ImagePath = $ImagesByName[$ImageName]
+            RequiredRows = @($Capture.requiredRows)
+            Layout = [string]$Capture.layout
+            Forbidden = @($Capture.forbidden)
+        }
+    }
+
+    return @($Expectations)
+}
+
 function Invoke-LoggedPowerShellScript {
     param(
         [Parameter(Mandatory = $true)][string]$ScriptPath,
@@ -184,6 +251,7 @@ function Test-ResultContract {
         "summary",
         "hil_script",
         "expected_display",
+        "visual_validation",
         "tests_run",
         "remaining_issues",
         "human_review_reason"
@@ -238,6 +306,7 @@ $ScenarioPath = Join-Path (Join-Path $PSScriptRoot "scenarios") "$Feature.json"
 
 $ScenarioContext = ""
 $ScenarioHilScript = ""
+$RequireVisualExpectations = $false
 if (Test-Path -LiteralPath $ScenarioPath -PathType Leaf) {
     $Scenario = Get-Content -LiteralPath $ScenarioPath -Raw | ConvertFrom-Json
     if ($Scenario.PSObject.Properties.Name -contains "hilScript") {
@@ -248,6 +317,9 @@ if (Test-Path -LiteralPath $ScenarioPath -PathType Leaf) {
         if (-not [string]::IsNullOrWhiteSpace($ScenarioContext)) {
             $ScenarioContext = "- $ScenarioContext"
         }
+    }
+    if ($Scenario.PSObject.Properties.Name -contains "requireVisualExpectations") {
+        $RequireVisualExpectations = [bool]$Scenario.requireVisualExpectations
     }
 }
 
@@ -321,6 +393,7 @@ if (-not [string]::IsNullOrWhiteSpace($ConfiguredHilScript)) {
 if (-not [string]::IsNullOrWhiteSpace($ScenarioContext)) {
     Write-Host "Scenario context:   $ScenarioPath"
 }
+Write-Host "Exact visuals:      $(if ($RequireVisualExpectations) { 'required' } else { 'optional' })"
 
 if ($PlanOnly) {
     Write-Host "PLAN ONLY: no branch, worktree, Codex, compile, upload, or camera action was performed."
@@ -400,8 +473,11 @@ Result contract:
 - For ready_for_hil, hil_script must be a relative .ps1 path inside this worktree. It must accept -FQBN, -Port, and -CaptureDirectory. Prefer '$ConfiguredHilScript' when that path is configured.
 - Return pass only after reviewing the latest controller log and every attached image, only when they visibly prove the task, and only if you made no changes after that evidence.
 - A capture script exiting zero proves capture, not visual correctness. Inspect the pixels and expected state transitions.
+- A focused HIL script may define authoritative per-image acceptance in visual-expectations.json under its CaptureDirectory. When exact expectations appear in the latest evidence, visual_validation must contain exactly one record for each expected image filename. Transcribe each visible text row verbatim and in order into observed_rows; do not copy the expected rows unless those pixels are actually visible.
+- Mark a visual_validation record as match only when observed_rows exactly equal requiredRows, layout_matches is true, forbidden_observed is empty, and all placement, wrapping, and absence requirements match. Materially incorrect placement, joined text, wrapping, truncation, stale content, or extra content is a mismatch even when the broader behavior works.
+- For mismatch or unreviewable evidence, do not return pass. Describe the pixels actually observed and either make the smallest safe correction for another HIL cycle or return human_review at a genuine boundary.
 - Return human_review only for a genuine boundary that cannot be resolved safely in another automated iteration; explain it precisely.
-- Use the required JSON schema fields. Use an empty string/array where a field is not applicable.
+- Use the required JSON schema fields, including visual_validation. Use an empty string/array where a field is not applicable.
 
 Scenario context:
 $ScenarioContext
@@ -483,6 +559,60 @@ $LatestEvidencePrompt
         }
         elseif ((Get-WorktreeFingerprint -WorkingTree $WorktreePath) -ne $LatestEvidence.TestedFingerprint) {
             $PassProblem = "PASS was rejected because files changed after the latest HIL run. Another HIL cycle is required."
+        }
+        elseif (@($Result.remaining_issues).Count -ne 0) {
+            $PassProblem = "PASS was rejected because Codex reported remaining issues."
+        }
+        elseif ($RequireVisualExpectations -and @($LatestEvidence.VisualExpectations).Count -eq 0) {
+            $PassProblem = "PASS was rejected because this scenario requires test-owned exact visual expectations."
+        }
+
+        if ([string]::IsNullOrWhiteSpace($PassProblem) -and
+            @($LatestEvidence.VisualExpectations).Count -gt 0) {
+            $VisualValidation = @($Result.visual_validation)
+            if ($VisualValidation.Count -ne @($LatestEvidence.VisualExpectations).Count) {
+                $PassProblem = "PASS was rejected because visual_validation must contain exactly one record per test-owned expectation."
+            }
+            else {
+                foreach ($Expectation in @($LatestEvidence.VisualExpectations)) {
+                    $Matches = @($VisualValidation | Where-Object { $_.image -eq $Expectation.Image })
+                    if ($Matches.Count -ne 1) {
+                        $PassProblem = "PASS was rejected because visual_validation did not uniquely cover '$($Expectation.Image)'."
+                        break
+                    }
+                    if ($Matches[0].status -ne "match") {
+                        $PassProblem = "PASS was rejected because '$($Expectation.Image)' was '$($Matches[0].status)', not an exact match."
+                        break
+                    }
+                    $ExpectedRows = @($Expectation.RequiredRows)
+                    $ObservedRows = @($Matches[0].observed_rows)
+                    if ($ObservedRows.Count -ne $ExpectedRows.Count) {
+                        $PassProblem = "PASS was rejected because '$($Expectation.Image)' did not report the required number of exact text rows."
+                        break
+                    }
+                    for ($RowIndex = 0; $RowIndex -lt $ExpectedRows.Count; $RowIndex++) {
+                        if ([string]$ObservedRows[$RowIndex] -cne [string]$ExpectedRows[$RowIndex]) {
+                            $PassProblem = "PASS was rejected because '$($Expectation.Image)' row $($RowIndex + 1) was '$($ObservedRows[$RowIndex])', expected '$($ExpectedRows[$RowIndex])'."
+                            break
+                        }
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($PassProblem)) {
+                        break
+                    }
+                    if ($Matches[0].layout_matches -ne $true) {
+                        $PassProblem = "PASS was rejected because '$($Expectation.Image)' did not match the required placement/wrapping layout."
+                        break
+                    }
+                    if (@($Matches[0].forbidden_observed).Count -ne 0) {
+                        $PassProblem = "PASS was rejected because '$($Expectation.Image)' contained forbidden visual material: $(@($Matches[0].forbidden_observed) -join '; ')"
+                        break
+                    }
+                    if ([string]::IsNullOrWhiteSpace([string]$Matches[0].observed)) {
+                        $PassProblem = "PASS was rejected because '$($Expectation.Image)' has no visual observation."
+                        break
+                    }
+                }
+            }
         }
 
         if ([string]::IsNullOrWhiteSpace($PassProblem)) {
@@ -583,6 +713,25 @@ $LatestEvidencePrompt
             Sort-Object FullName |
             Select-Object -ExpandProperty FullName
     )
+    $VisualExpectationsPath = Join-Path $CaptureDirectory "visual-expectations.json"
+    $VisualExpectations = @()
+    $VisualExpectationProblem = ""
+    try {
+        $VisualExpectations = @(Read-VisualExpectations -Path $VisualExpectationsPath -Images $Images)
+        if ($RequireVisualExpectations -and $VisualExpectations.Count -eq 0) {
+            throw "This scenario requires $VisualExpectationsPath."
+        }
+    }
+    catch {
+        $VisualExpectationProblem = $_.Exception.Message
+        if ([string]::IsNullOrWhiteSpace($RunnerProblem)) {
+            $RunnerProblem = $VisualExpectationProblem
+        }
+        else {
+            $RunnerProblem = "$RunnerProblem $VisualExpectationProblem"
+        }
+        $HilExitCode = -1
+    }
     $TestedFingerprint = Get-WorktreeFingerprint -WorkingTree $WorktreePath
     $LatestEvidence = [pscustomobject]@{
         Iteration = $Iteration
@@ -591,6 +740,8 @@ $LatestEvidencePrompt
         HilExitCode = $HilExitCode
         RunnerProblem = $RunnerProblem
         ExpectedDisplay = @($Result.expected_display)
+        VisualExpectations = $VisualExpectations
+        VisualExpectationsPath = $VisualExpectationsPath
         Images = $Images
         TestedFingerprint = $TestedFingerprint
         CompileLog = $CompileLog
@@ -598,14 +749,21 @@ $LatestEvidencePrompt
     }
     $LatestEvidence | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $EvidencePath
 
+    $VisualExpectationsPrompt = "No test-owned exact visual expectations were supplied."
+    if ($VisualExpectations.Count -gt 0) {
+        $VisualExpectationsPrompt = $VisualExpectations | ConvertTo-Json -Depth 5
+    }
+
     $LatestEvidencePrompt = @"
 Controller evidence file: $EvidencePath
 Focused HIL script: $SelectedHilScript
 Compile-all exit code: $CompileExitCode
 Focused HIL exit code: $HilExitCode
 Runner problem: $RunnerProblem
-Expected display/state transitions:
+Codex-authored general display/state transitions:
 - $(@($Result.expected_display) -join "`n- ")
+Authoritative test-owned exact visual expectations:
+$VisualExpectationsPrompt
 Camera images attached to this iteration: $($Images.Count)
 
 Compile log:
