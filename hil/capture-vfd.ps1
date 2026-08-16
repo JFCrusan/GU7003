@@ -1,8 +1,22 @@
 [CmdletBinding()]
 param(
     [string]$Image = (Join-Path $PSScriptRoot "vfd.jpg"),
-    [string]$VideoDevice = "HD Pro Webcam C920",
-    [string]$Crop = "crop=390:115:135:120"
+    [string]$VideoDevice = $(
+        if ([string]::IsNullOrWhiteSpace($env:GU7003_HIL_VIDEO_DEVICE)) {
+            "HD Pro Webcam C920"
+        }
+        else {
+            $env:GU7003_HIL_VIDEO_DEVICE
+        }
+    ),
+    [string]$Crop = $(
+        if ([string]::IsNullOrWhiteSpace($env:GU7003_HIL_CROP)) {
+            "crop=390:115:135:120"
+        }
+        else {
+            $env:GU7003_HIL_CROP
+        }
+    )
 )
 
 Set-StrictMode -Version Latest

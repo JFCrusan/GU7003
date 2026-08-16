@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$FQBN = "arduino:avr:diecimila:cpu=atmega328",
-    [string]$Port = "COM3"
+    [string]$Port = "COM3",
+    [string]$CaptureDirectory = (Join-Path ([System.IO.Path]::GetTempPath()) "GU7003-HIL\Basic")
 )
 
 Set-StrictMode -Version Latest
@@ -10,7 +11,8 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $Sketch = Join-Path $RepoRoot "examples\Basic"
 $CaptureScript = Join-Path $PSScriptRoot "capture-vfd.ps1"
-$Image = Join-Path $PSScriptRoot "vfd.jpg"
+$CaptureDirectory = [System.IO.Path]::GetFullPath($CaptureDirectory)
+$Image = Join-Path $CaptureDirectory "basic.jpg"
 $ArduinoCliCommand = Get-Command arduino-cli -ErrorAction SilentlyContinue
 $ArduinoCli = if ($ArduinoCliCommand) { $ArduinoCliCommand.Source } else { $null }
 
@@ -28,10 +30,13 @@ if (-not $ArduinoCli) {
     throw "arduino-cli was not found. Install it or add it to PATH."
 }
 
+New-Item -ItemType Directory -Path $CaptureDirectory -Force | Out-Null
+
 Write-Host "=== GU7003 BASIC HIL TEST ==="
 Write-Host "Repository: $RepoRoot"
 Write-Host "Target:     $FQBN"
 Write-Host "Port:       $Port"
+Write-Host "Captures:   $CaptureDirectory"
 
 Write-Host "[1/4] Compiling Basic..."
 & $ArduinoCli compile --fqbn $FQBN --library $RepoRoot $Sketch

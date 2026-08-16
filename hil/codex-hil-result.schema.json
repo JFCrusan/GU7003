@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["ready_for_hil", "pass", "human_review"]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "hil_script": {
+      "type": "string"
+    },
+    "expected_display": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "tests_run": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "remaining_issues": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "human_review_reason": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "status",
+    "summary",
+    "hil_script",
+    "expected_display",
+    "tests_run",
+    "remaining_issues",
+    "human_review_reason"
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "hilScript": "hil/test-user-windows.ps1",
+  "context": [
+    "Resume the existing feature/user-windows worktree and preserve all of its uncommitted implementation, example, documentation, and HIL-test changes.",
+    "A prior physical run compiled and uploaded successfully. Window definition, selection, independent population, and updating window 1 while preserving window 2 were observed working.",
+    "The prior final camera capture did not show the base window restored after both user windows were cancelled. Treat base-window restoration as unresolved and do not return pass until a new controller-run HIL cycle visibly proves it."
+  ]
+}
