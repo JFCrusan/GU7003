@@ -139,9 +139,38 @@ The original functions remain available:
 - `setBrightness(1..8)`
 - `setFontSize(width, height)`
 - `setCursor(x, y)`
+- `defineUserWindow(window, x, y, width, heightBytes)`
+- `selectWindow(window)`
+- `cancelUserWindow(window)`
 - `powerSave(true/false)`
 - `print(...)`
 - `println(...)`
+
+## User windows
+
+The native GU-7000 window commands divide the display into as many as four
+independently controlled regions. Window `0` is the base window and user window
+numbers are `1` through `4`. X positions and widths are in dots; Y positions and
+heights are in native 8-dot units.
+
+```cpp
+vfd.defineUserWindow(1, 0, 0, 112, 1); // top 112x8 region
+vfd.defineUserWindow(2, 0, 1, 112, 1); // bottom 112x8 region
+
+vfd.selectWindow(1);
+vfd.print("TOP");
+
+vfd.selectWindow(2);
+vfd.print("BOTTOM");
+
+vfd.cancelUserWindow(1);
+vfd.cancelUserWindow(2);
+vfd.selectWindow(0);                    // select the base window explicitly
+```
+
+Defining or canceling a window does not erase its display contents. When the
+currently selected user window is canceled, the library explicitly selects the
+base window so subsequent output can safely use the full display.
 
 ## Character spacing
 
@@ -179,6 +208,11 @@ Demonstrates:
 - multiple icons
 - mixed bitmap and text output
 - an edit-pointer style UI element
+
+### UserWindows
+
+Defines independent top and bottom windows, updates one without disturbing the
+other, then cancels both and demonstrates that the base window is active again.
 
 ## Compatibility
 

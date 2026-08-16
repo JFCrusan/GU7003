@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$FQBN = "arduino:avr:diecimila:cpu=atmega328"
+    [string]$FQBN = "arduino:avr:diecimila:cpu=atmega328",
+    [string]$BuildRoot = (Join-Path ([System.IO.Path]::GetTempPath()) "GU7003-ArduinoBuild\compile-all")
 )
 
 Set-StrictMode -Version Latest
@@ -44,7 +45,9 @@ $Passed = 0
 foreach ($Example in $Examples) {
     Write-Host ""
     Write-Host "Compiling $($Example.Name)..."
-    & $ArduinoCli compile --fqbn $FQBN --library $RepoRoot $Example.FullName
+    $BuildPath = Join-Path $BuildRoot $Example.Name
+    New-Item -ItemType Directory -Path $BuildPath -Force | Out-Null
+    & $ArduinoCli compile --fqbn $FQBN --library $RepoRoot --build-path $BuildPath $Example.FullName
 
     if ($LASTEXITCODE -ne 0) {
         Write-Host "FAIL: $($Example.Name)" -ForegroundColor Red

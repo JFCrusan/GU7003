@@ -5,6 +5,7 @@ GU7003::GU7003(uint8_t resetPin, uint8_t busyPin)
 {
   _resetPin = resetPin;
   _busyPin = busyPin;
+  _currentWindow = 0;
 }
 
 void GU7003::begin()
@@ -19,6 +20,7 @@ void GU7003::begin()
   digitalWrite(_resetPin, HIGH);
   delay(500);
 
+  _currentWindow = 0;
   clear();
   cursorOff();
   setBrightness(8);
@@ -84,6 +86,43 @@ void GU7003::setCursor(uint16_t x, uint16_t y)
   write(x & 0xFF); write((x >> 8) & 0xFF);
   write(y & 0xFF); write((y >> 8) & 0xFF);
   delay(20);
+}
+
+void GU7003::defineUserWindow(uint8_t window, uint16_t x, uint16_t y,
+                              uint16_t width, uint16_t heightBytes)
+{
+  if (window < 1 || window > 4 || width == 0 || heightBytes == 0) return;
+
+  write(0x1F); write(0x28); write(0x77); write(0x02);
+  write(window); write(0x01);
+  write(x & 0xFF); write((x >> 8) & 0xFF);
+  write(y & 0xFF); write((y >> 8) & 0xFF);
+  write(width & 0xFF); write((width >> 8) & 0xFF);
+  write(heightBytes & 0xFF); write((heightBytes >> 8) & 0xFF);
+  delay(20);
+}
+
+void GU7003::selectWindow(uint8_t window)
+{
+  if (window > 4) return;
+
+  write(0x1F); write(0x28); write(0x77); write(0x01); write(window);
+  _currentWindow = window;
+  delay(20);
+}
+
+void GU7003::cancelUserWindow(uint8_t window)
+{
+  if (window < 1 || window > 4) return;
+
+  write(0x1F); write(0x28); write(0x77); write(0x02);
+  write(window); write(0x00);
+  delay(20);
+
+  // The controller specification says canceling the current user window
+  // selects the base window. Send that selection explicitly as well so the
+  // library guarantees the same state on affected GU-7003 modules.
+  if (_currentWindow == window) selectWindow(0);
 }
 
 void GU7003::screenMode(uint8_t mode)

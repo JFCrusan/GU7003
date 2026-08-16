@@ -24,6 +24,13 @@ public:
   void setCharacterSpacing(uint8_t mode);
   void setCursor(uint16_t x, uint16_t y);
 
+  // Native GU-7000 user windows. Window 0 is the base window; user window
+  // numbers are 1 through 4. Y positions and heights use 8-dot units.
+  void defineUserWindow(uint8_t window, uint16_t x, uint16_t y,
+                        uint16_t width, uint16_t heightBytes);
+  void selectWindow(uint8_t window);
+  void cancelUserWindow(uint8_t window);
+
   void powerSave(bool enable);
   void screenMode(uint8_t mode);
   void reverse(bool enable);
@@ -57,6 +64,7 @@ private:
 
   uint8_t _resetPin;
   uint8_t _busyPin;
+  uint8_t _currentWindow;
 };
 
 #endif

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Added native user-window definition, selection, and cancellation APIs.
+- Added a focused `UserWindows` example and webcam HIL test.
+
 ## 1.1.0
 
 - Added hardware-validated graphics support for the GU112X16G-7003.
