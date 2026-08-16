@@ -1,0 +1,11 @@
+{
+  "hilScript": "hil/test-feature-showcase.ps1",
+  "evidenceMode": "mixed",
+  "requireVisualExpectations": true,
+  "context": [
+    "Validate the forever-looping showroom sequence against every test-owned exact static expectation and every dynamic video contract.",
+    "The focused script uploads the actual examples/FeatureShowcase sketch and uses controller-provided C920 device/crop environment through the shared capture helpers.",
+    "Do not accept stale pixels, clipped or wrapped text, joined rows, state leakage, approximate layout, missing mixture patterns, incomplete user-window restoration, blink cadence failures, or an unproven finale-to-title transition.",
+    "Native blink and write-mixture support were minimally integrated from committed hardware-validated feature commits 6d76961 and 7a8c0e0 without modifying their worktrees."
+  ]
+}

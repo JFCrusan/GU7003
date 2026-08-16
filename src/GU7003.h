@@ -8,6 +8,21 @@ class GU7003
 public:
   static const uint16_t DISPLAY_WIDTH = 112;
   static const uint8_t DISPLAY_HEIGHT = 16;
+  static const uint8_t BLINK_TICK_MS = 14;
+
+  enum class BlinkMode : uint8_t
+  {
+    NormalBlank = 0x01,
+    NormalReverse = 0x02
+  };
+
+  enum class WriteMixtureMode : uint8_t
+  {
+    Normal = 0,
+    OR = 1,
+    AND = 2,
+    XOR = 3
+  };
 
   GU7003(uint8_t resetPin, uint8_t busyPin);
 
@@ -34,6 +49,15 @@ public:
   void powerSave(bool enable);
   void screenMode(uint8_t mode);
   void reverse(bool enable);
+  void setWriteMixtureMode(WriteMixtureMode mode);
+
+  // Blink times are expressed in approximately 14 ms hardware ticks.
+  // blink() runs for 1..255 cycles; zero values are clamped to one.
+  void blink(BlinkMode mode, uint8_t normalTicks,
+             uint8_t alternateTicks, uint8_t cycles);
+  void blinkContinuous(BlinkMode mode, uint8_t normalTicks,
+                       uint8_t alternateTicks);
+  void stopBlink();
 
   // Low-level native GU-7000 bitmap calls.
   // heightBytes is 1 for 8 dots high or 2 for 16 dots high.
@@ -60,6 +84,8 @@ public:
 
 private:
   void write(uint8_t data);
+  void sendBlinkCommand(uint8_t pattern, uint8_t normalTicks,
+                        uint8_t alternateTicks, uint8_t cycles);
   void beginNativeBitmap(uint16_t x, uint8_t width, uint8_t heightBytes);
 
   uint8_t _resetPin;

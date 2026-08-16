@@ -26,6 +26,7 @@ void GU7003::begin()
   setBrightness(8);
   setFontSize(1, 1);
   setCharacterSpacing(1);
+  setWriteMixtureMode(WriteMixtureMode::Normal);
 }
 
 void GU7003::write(uint8_t data)
@@ -140,6 +141,56 @@ void GU7003::reverse(bool enable)
 {
   write(0x1F); write(0x72); write(enable ? 0x01 : 0x00);
   delay(10);
+}
+
+void GU7003::setWriteMixtureMode(WriteMixtureMode mode)
+{
+  uint8_t value = static_cast<uint8_t>(mode);
+  if (value > static_cast<uint8_t>(WriteMixtureMode::XOR))
+    value = static_cast<uint8_t>(WriteMixtureMode::Normal);
+
+  write(0x1F); write(0x77); write(value);
+  delay(10);
+}
+
+void GU7003::sendBlinkCommand(uint8_t pattern, uint8_t normalTicks,
+                              uint8_t alternateTicks, uint8_t cycles)
+{
+  if (normalTicks == 0) normalTicks = 1;
+  if (alternateTicks == 0) alternateTicks = 1;
+
+  write(0x1F); write(0x28); write(0x61); write(0x11);
+  write(pattern); write(normalTicks); write(alternateTicks); write(cycles);
+
+  // Ensure the complete command is on the wire before returning. This lets
+  // SBUSY assert before a following write checks it, which is essential for
+  // finite blink actions that temporarily stop command processing.
+  Serial.flush();
+  delay(1);
+}
+
+void GU7003::blink(BlinkMode mode, uint8_t normalTicks,
+                   uint8_t alternateTicks, uint8_t cycles)
+{
+  if (cycles == 0) cycles = 1;
+
+  sendBlinkCommand(static_cast<uint8_t>(mode), normalTicks,
+                   alternateTicks, cycles);
+}
+
+void GU7003::blinkContinuous(BlinkMode mode, uint8_t normalTicks,
+                             uint8_t alternateTicks)
+{
+  sendBlinkCommand(static_cast<uint8_t>(mode), normalTicks,
+                   alternateTicks, 0);
+}
+
+void GU7003::stopBlink()
+{
+  // Pattern 0 selects normal display. A finite cycle value explicitly
+  // terminates an active c=0 continuous action without clearing display RAM.
+  sendBlinkCommand(0x00, 1, 1, 1);
+  delay(20);
 }
 
 void GU7003::beginNativeBitmap(uint16_t x, uint8_t width, uint8_t heightBytes)
