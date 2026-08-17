@@ -8,8 +8,13 @@ param(
     [ValidateNotNullOrEmpty()]
     [string]$Task,
 
-    [ValidateRange(2, 20)]
-    [int]$MaxIterations = 5,
+    [ValidateSet("fast", "normal", "release")]
+    [string]$Profile = "fast",
+
+    [ValidateRange(0, 20)]
+    [int]$MaxIterations = 0,
+
+    [string]$Model = "",
 
     [string]$HilScript = "",
     [string]$FQBN = "arduino:avr:diecimila:cpu=atmega328",
@@ -473,6 +478,117 @@ function Write-ReviewSummary {
     Write-Host "No feature commit, merge, push, reset, or worktree cleanup was performed."
 }
 
+function Resolve-CodexModel {
+    param([string]$RequestedModel)
+
+    if (-not [string]::IsNullOrWhiteSpace($RequestedModel)) {
+        return $RequestedModel.Trim()
+    }
+
+    $CodexHome = $env:CODEX_HOME
+    if ([string]::IsNullOrWhiteSpace($CodexHome)) {
+        $CodexHome = Join-Path ([Environment]::GetFolderPath("UserProfile")) ".codex"
+    }
+    $ConfigPath = Join-Path $CodexHome "config.toml"
+    if (Test-Path -LiteralPath $ConfigPath -PathType Leaf) {
+        foreach ($Line in Get-Content -LiteralPath $ConfigPath) {
+            if ($Line -match '^\s*model\s*=\s*["'']([^"'']+)["'']\s*(?:#.*)?$') {
+                return $Matches[1]
+            }
+        }
+    }
+
+    throw "Unable to determine the effective Codex model. Pass -Model or set top-level model in $ConfigPath."
+}
+
+function Assert-FastProfileSafety {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProfileName,
+        [Parameter(Mandatory = $true)][string]$ReasoningEffort
+    )
+
+    if ($ProfileName -eq "fast" -and $ReasoningEffort -in @("high", "xhigh", "max")) {
+        throw "The fast profile resolved to prohibited reasoning effort '$ReasoningEffort'. Codex was not invoked."
+    }
+}
+
+function Format-CommandPreview {
+    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+
+    return (($Arguments | ForEach-Object {
+        if ($_ -match '[\s"]') {
+            '"' + ($_ -replace '"', '\"') + '"'
+        }
+        else {
+            $_
+        }
+    }) -join " ")
+}
+
+function New-CodexArguments {
+    param(
+        [Parameter(Mandatory = $true)][string]$ModelName,
+        [Parameter(Mandatory = $true)][string]$ReasoningEffort,
+        [Parameter(Mandatory = $true)][string]$WorkingTree,
+        [Parameter(Mandatory = $true)][string]$Schema,
+        [Parameter(Mandatory = $true)][string]$Result
+    )
+
+    return @(
+        "exec",
+        "--model", $ModelName,
+        "--config", "model_reasoning_effort='$ReasoningEffort'",
+        "--strict-config",
+        "--sandbox", "workspace-write",
+        "--ask-for-approval", "never",
+        "--cd", $WorkingTree,
+        "--output-schema", $Schema,
+        "--output-last-message", $Result,
+        "--color", "never"
+    )
+}
+
+$ProfilePolicy = switch ($Profile) {
+    "fast" {
+        [pscustomobject]@{
+            ReasoningEffort = "low"
+            DefaultMaxIterations = 2
+            ValidationScope = "focused"
+        }
+    }
+    "normal" {
+        [pscustomobject]@{
+            ReasoningEffort = "medium"
+            DefaultMaxIterations = 5
+            ValidationScope = "focused"
+        }
+    }
+    "release" {
+        [pscustomobject]@{
+            ReasoningEffort = "high"
+            DefaultMaxIterations = 8
+            ValidationScope = "full"
+        }
+    }
+}
+
+$ReasoningEffort = $ProfilePolicy.ReasoningEffort
+if ($MaxIterations -eq 0) {
+    $MaxIterations = $ProfilePolicy.DefaultMaxIterations
+}
+if ($Profile -eq "fast" -and $MaxIterations -gt $ProfilePolicy.DefaultMaxIterations) {
+    throw "The fast profile permits at most $($ProfilePolicy.DefaultMaxIterations) Codex iterations; requested $MaxIterations."
+}
+Assert-FastProfileSafety -ProfileName $Profile -ReasoningEffort $ReasoningEffort
+
+$EffectiveModel = Resolve-CodexModel -RequestedModel $Model
+$ValidationGuidance = if ($ProfilePolicy.ValidationScope -eq "full") {
+    "Run the complete safe static/non-hardware validation suite before requesting external HIL."
+}
+else {
+    "Run only focused safe static/non-hardware checks relevant to the files changed before requesting external HIL."
+}
+
 $RepoRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $RepoParent = Split-Path -Parent $RepoRoot
 $RepoName = Split-Path -Leaf $RepoRoot
@@ -514,14 +630,16 @@ if ([string]::IsNullOrWhiteSpace($ConfiguredHilScript)) {
     $ConfiguredHilScript = $ScenarioHilScript
 }
 
-$CurrentBranch = (@(Invoke-GitLines -WorkingTree $RepoRoot -Arguments @("branch", "--show-current")) -join "").Trim()
-if ($CurrentBranch -ne "main") {
-    throw "codex-hil.ps1 must start from a main worktree; current branch is '$CurrentBranch'."
-}
+if (-not $PlanOnly) {
+    $CurrentBranch = (@(Invoke-GitLines -WorkingTree $RepoRoot -Arguments @("branch", "--show-current")) -join "").Trim()
+    if ($CurrentBranch -ne "main") {
+        throw "codex-hil.ps1 must start from a main worktree; current branch is '$CurrentBranch'."
+    }
 
-$MainStatus = @(Invoke-GitLines -WorkingTree $RepoRoot -Arguments @("status", "--porcelain", "--untracked-files=all"))
-if ($MainStatus.Count -ne 0) {
-    throw "The main controller worktree must be clean before automation starts."
+    $MainStatus = @(Invoke-GitLines -WorkingTree $RepoRoot -Arguments @("status", "--porcelain", "--untracked-files=all"))
+    if ($MainStatus.Count -ne 0) {
+        throw "The main controller worktree must be clean before automation starts."
+    }
 }
 
 if (-not (Test-Path -LiteralPath $SchemaPath -PathType Leaf)) {
@@ -540,6 +658,13 @@ $BranchCheck = $LASTEXITCODE
 if ($BranchCheck -notin @(0, 1)) {
     throw "Unable to check whether $BranchName exists: $($BranchExistsOutput -join [Environment]::NewLine)"
 }
+
+$CodexBaseArguments = @(New-CodexArguments `
+    -ModelName $EffectiveModel `
+    -ReasoningEffort $ReasoningEffort `
+    -WorkingTree $DefaultWorktreePath `
+    -Schema $SchemaPath `
+    -Result "<per-iteration-result.json>")
 
 $WorktreePath = $DefaultWorktreePath
 $WorktreeAction = ""
@@ -564,11 +689,16 @@ else {
 }
 
 Write-Host "=== GU7003 CODEX HIL CONTROLLER V2 ==="
-Write-Host "Controller source:  $RepoRoot (clean main)"
+Write-Host "Controller source:  $RepoRoot"
 Write-Host "Feature branch:     $BranchName"
 Write-Host "Feature worktree:   $WorktreePath"
 Write-Host "Worktree action:    $WorktreeAction"
+Write-Host "Profile:            $Profile"
+Write-Host "Codex model:        $EffectiveModel"
+Write-Host "Reasoning effort:   $ReasoningEffort"
+Write-Host "Validation scope:   $($ProfilePolicy.ValidationScope)"
 Write-Host "Maximum iterations: $MaxIterations"
+Write-Host "Codex invocation:   codex $(Format-CommandPreview -Arguments $CodexBaseArguments) -"
 Write-Host "Board:              $FQBN"
 Write-Host "Port:               $Port"
 Write-Host "Camera:             $VideoDevice"
@@ -654,6 +784,8 @@ Safety contract:
 - Work only in the existing feature worktree.
 - Never commit, merge, push, reset, clean, create/remove worktrees, or switch branches.
 - Run git diff --check and safe static/non-hardware checks when useful.
+- Controller profile: $Profile; reasoning effort: $ReasoningEffort; validation scope: $($ProfilePolicy.ValidationScope).
+- $ValidationGuidance
 - Any code or test change made after HIL evidence requires another controller-run HIL cycle.
 
 Result contract:
@@ -680,15 +812,13 @@ Latest external evidence:
 $LatestEvidencePrompt
 "@
 
-    $CodexArguments = @(
-        "exec",
-        "--sandbox", "workspace-write",
-        "--ask-for-approval", "never",
-        "--cd", $WorktreePath,
-        "--output-schema", $SchemaPath,
-        "--output-last-message", $ResultPath,
-        "--color", "never"
-    )
+    Assert-FastProfileSafety -ProfileName $Profile -ReasoningEffort $ReasoningEffort
+    $CodexArguments = @(New-CodexArguments `
+        -ModelName $EffectiveModel `
+        -ReasoningEffort $ReasoningEffort `
+        -WorkingTree $WorktreePath `
+        -Schema $SchemaPath `
+        -Result $ResultPath)
     foreach ($Image in $LatestImages) {
         $CodexArguments += @("--image", $Image)
     }
