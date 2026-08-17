@@ -129,6 +129,42 @@ vfd.reverse(false);
 vfd.screenMode(mode);
 ```
 
+`screenMode()` is retained for compatibility and sends the GU-7000 screen-saver
+command. New code that selects where base-window writes operate should use the
+correctly named write-screen-mode API:
+
+```cpp
+vfd.setWriteScreenMode(GU7003::WriteScreenMode::Display);
+vfd.setWriteScreenMode(GU7003::WriteScreenMode::All);
+```
+
+## Native scrolling
+
+The three controller write modes and horizontal character-scroll speed are
+available directly:
+
+```cpp
+vfd.setWriteMode(GU7003::WriteMode::Overwrite);
+vfd.setWriteMode(GU7003::WriteMode::VerticalScroll);
+vfd.setWriteMode(GU7003::WriteMode::HorizontalScroll);
+vfd.setHorizontalScrollSpeed(2); // 0 is immediate; 1 is fastest; 31 slowest
+```
+
+The GU112X16G-7003 has 512x16 dots of controller memory: 112 visible columns
+and 400 hidden columns. `scrollDisplay()` exposes the native memory action:
+
+```cpp
+vfd.setWriteScreenMode(GU7003::WriteScreenMode::All);
+vfd.scrollDisplay(2, 112, 2); // shift left 1 pixel, 112 times, ~28 ms/shift
+```
+
+Its arguments are native shift-byte count, cycle count, and approximately
+14 ms speed ticks. Because this module is 16 dots high, two bytes represent a
+one-pixel horizontal shift. The action leaves the visible-memory origin at its
+new offset; shifting a total multiple of 512 pixels restores the original
+origin. After writing hidden memory in `Display` write-screen mode, explicitly
+move the cursor back into the visible area before a scoped clear or write.
+
 The original functions remain available:
 
 - `begin()`
@@ -213,6 +249,11 @@ Demonstrates:
 
 Defines independent top and bottom windows, updates one without disturbing the
 other, then cancels both and demonstrates that the base window is active again.
+
+### NativeScrolling
+
+Demonstrates hidden-memory display scrolling plus horizontal and vertical write
+modes using only controller-native actions.
 
 ## Compatibility
 

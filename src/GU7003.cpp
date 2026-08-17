@@ -132,6 +132,16 @@ void GU7003::screenMode(uint8_t mode)
   delay(20);
 }
 
+void GU7003::setWriteScreenMode(WriteScreenMode mode)
+{
+  uint8_t value = static_cast<uint8_t>(mode);
+  if (value > static_cast<uint8_t>(WriteScreenMode::All))
+    value = static_cast<uint8_t>(WriteScreenMode::Display);
+
+  write(0x1F); write(0x28); write(0x77); write(0x10); write(value);
+  delay(20);
+}
+
 void GU7003::powerSave(bool enable)
 {
   screenMode(enable ? 0x00 : 0x01);
@@ -151,6 +161,42 @@ void GU7003::setWriteMixtureMode(WriteMixtureMode mode)
 
   write(0x1F); write(0x77); write(value);
   delay(10);
+}
+
+void GU7003::setWriteMode(WriteMode mode)
+{
+  uint8_t value = static_cast<uint8_t>(mode);
+  if (value < static_cast<uint8_t>(WriteMode::Overwrite) ||
+      value > static_cast<uint8_t>(WriteMode::HorizontalScroll))
+    value = static_cast<uint8_t>(WriteMode::Overwrite);
+
+  write(0x1F); write(value);
+  delay(10);
+}
+
+void GU7003::setHorizontalScrollSpeed(uint8_t speed)
+{
+  if (speed > 31) speed = 31;
+  write(0x1F); write(0x73); write(speed);
+  delay(10);
+}
+
+void GU7003::scrollDisplay(uint16_t shiftBytes, uint16_t cycles,
+                           uint8_t speedTicks)
+{
+  if (shiftBytes >= DISPLAY_MEMORY_BYTES)
+    shiftBytes = DISPLAY_MEMORY_BYTES - 1;
+  if (cycles == 0) cycles = 1;
+
+  write(0x1F); write(0x28); write(0x61); write(0x10);
+  write(shiftBytes & 0xFF); write((shiftBytes >> 8) & 0xFF);
+  write(cycles & 0xFF); write((cycles >> 8) & 0xFF);
+  write(speedTicks);
+
+  // Put the complete action command on the wire before returning so SBUSY
+  // can protect any following write while the controller is scrolling.
+  Serial.flush();
+  delay(1);
 }
 
 void GU7003::sendBlinkCommand(uint8_t pattern, uint8_t normalTicks,

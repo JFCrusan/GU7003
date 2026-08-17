@@ -8,6 +8,8 @@ class GU7003
 public:
   static const uint16_t DISPLAY_WIDTH = 112;
   static const uint8_t DISPLAY_HEIGHT = 16;
+  static const uint16_t DISPLAY_MEMORY_WIDTH = 512;
+  static const uint16_t DISPLAY_MEMORY_BYTES = 1024;
   static const uint8_t BLINK_TICK_MS = 14;
 
   enum class BlinkMode : uint8_t
@@ -22,6 +24,19 @@ public:
     OR = 1,
     AND = 2,
     XOR = 3
+  };
+
+  enum class WriteMode : uint8_t
+  {
+    Overwrite = 0x01,
+    VerticalScroll = 0x02,
+    HorizontalScroll = 0x03
+  };
+
+  enum class WriteScreenMode : uint8_t
+  {
+    Display = 0x00,
+    All = 0x01
   };
 
   GU7003(uint8_t resetPin, uint8_t busyPin);
@@ -47,9 +62,19 @@ public:
   void cancelUserWindow(uint8_t window);
 
   void powerSave(bool enable);
+  // Compatibility API: this sends the native screen-saver command.
   void screenMode(uint8_t mode);
+  void setWriteScreenMode(WriteScreenMode mode);
   void reverse(bool enable);
   void setWriteMixtureMode(WriteMixtureMode mode);
+
+  void setWriteMode(WriteMode mode);
+  void setHorizontalScrollSpeed(uint8_t speed);
+
+  // Native display-memory scroll. On this 16-dot-high module, shiftBytes=2
+  // shifts left by one pixel. speedTicks are approximately 14 ms each.
+  void scrollDisplay(uint16_t shiftBytes, uint16_t cycles,
+                     uint8_t speedTicks);
 
   // Blink times are expressed in approximately 14 ms hardware ticks.
   // blink() runs for 1..255 cycles; zero values are clamped to one.
