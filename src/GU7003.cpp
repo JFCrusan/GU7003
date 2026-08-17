@@ -255,8 +255,9 @@ void GU7003::drawBitmapNativeRAM(uint16_t x, uint8_t width,
                                  uint8_t heightBytes, const uint8_t *data)
 {
   if (!data || width == 0 || heightBytes == 0 || heightBytes > 2) return;
-  if (x >= DISPLAY_WIDTH) return;
-  if ((uint16_t)x + width > DISPLAY_WIDTH) width = DISPLAY_WIDTH - x;
+  if (x >= DISPLAY_MEMORY_WIDTH) return;
+  if ((uint16_t)x + width > DISPLAY_MEMORY_WIDTH)
+    width = DISPLAY_MEMORY_WIDTH - x;
 
   beginNativeBitmap(x, width, heightBytes);
 
@@ -268,8 +269,9 @@ void GU7003::drawBitmapNative_P(uint16_t x, uint8_t width,
                                 uint8_t heightBytes, const uint8_t *data)
 {
   if (!data || width == 0 || heightBytes == 0 || heightBytes > 2) return;
-  if (x >= DISPLAY_WIDTH) return;
-  if ((uint16_t)x + width > DISPLAY_WIDTH) width = DISPLAY_WIDTH - x;
+  if (x >= DISPLAY_MEMORY_WIDTH) return;
+  if ((uint16_t)x + width > DISPLAY_MEMORY_WIDTH)
+    width = DISPLAY_MEMORY_WIDTH - x;
 
   beginNativeBitmap(x, width, heightBytes);
 
